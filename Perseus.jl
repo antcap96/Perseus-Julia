@@ -32,8 +32,10 @@ function PerseusSolver(pomdp::POMDP; max_iterations::Integer,
 end
 
 function POMDPs.solve(solver::PerseusSolver, pomdp::POMDP; verbose=false)
-    (αs, policy) = perseus(pomdp, solver.max_iterations,
-                           solver.B, stop_tolerance = solver.stop_tolerance,
+    (αs, policy) = perseus(pomdp,
+                           solver.max_iterations,
+                           solver.B,
+                           stop_tolerance = solver.stop_tolerance,
                            improvement_tolerance = solver.improvement_tolerance, 
                            verbose = verbose)
 
@@ -66,10 +68,12 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
                 if val > current_max
                     current_max = val
                     current_max_idx = i
+                    #TODO: possibly faster to asign the values instead of replacing g
+                    #      goal: reduce the number of alocations
                     g = temp_g
                 end
             end
-            temp[actionindex(pomdp,a),:] .+= g #sum along o
+            temp[actionindex(pomdp,a),:] .+= g #sum along observations
         end
 
     end
@@ -95,9 +99,7 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
     end
 
     return (best_vector, best_action)
-#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 end
-# V são conjuntos de α's
 
 function perseus_step(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMatrix, policies_prev::Vector{A}; error=1e-6) where {S,A,O}
 
@@ -122,17 +124,18 @@ function perseus_step(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMa
         end
 
         filter!(B_) do b
+            #V_(b) < value_of_b
             value_of_b = maximum(V_prev * b)
             for v in V_
                 value = v' * b
                 (value >= value_of_b || isapprox(value, value_of_b, atol=error)) && return false
             end
             return true
-            #V_(b) < value_of_b
         end
     end
 
-    temp = [V_[i][j] for i in 1:size(V_,1), j in 1:size(V_[1],1)]
+    #temp = [V_[i][j] for i in 1:size(V_,1), j in 1:size(V_[1],1)]
+    temp = temp = [v[j] for v in V_, j in 1:size(V_[1],1)]
     #temp = hcat(V_...)' <- TODO this appears to be faster!
     #temp = [v[j] for v in V_, j in 1:size(V_[1],1)] maybe can be done better
 
@@ -148,8 +151,6 @@ function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::Abstra
     B_ = copy(B)
 
     for b in B_
-        #b = rand(B_)
-
         α, bestaction = backup(pomdp, b, V_prev)
 
         value_of_b, value_of_b_idx = findmax(V_prev * b)
@@ -160,7 +161,8 @@ function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::Abstra
         end
     end
     if length(policies) > 0
-        temp = [V_[i][j] for i in 1:size(V_,1), j in 1:size(V_[1],1)]
+        #temp = [V_[i][j] for i in 1:size(V_,1), j in 1:size(V_[1],1)]
+        temp = [v[j] for v in V_, j in 1:size(V_[1],1)]
     else
         temp = Array{Float64, 2}(undef,0,0)
     end
@@ -184,12 +186,12 @@ function get_random_beliefs(pomdp::POMDP, depth::Integer, branchingfactor::Integ
     for d in 1:depth
         for i in first:last
             for j in 1:branchingfactor
-                #push!(B, update(up, B[i], rand(actions(pomdp)), rand(observations(pomdp))))
                 new_b = update(up, B[i], rand(actions(pomdp)), rand(observations(pomdp)))
                 new = true
                 for b in B
                     if sum(abs.(b.b .- new_b.b)) < error
                         new = false
+                        break
                     end
                 end
                 if new
@@ -197,20 +199,23 @@ function get_random_beliefs(pomdp::POMDP, depth::Integer, branchingfactor::Integ
                 end
             end
         end
-        B = unique(B)
+        #B = unique(B)
         first = last+1
         last = lastindex(B)
     end
 
-    return map(b->b.b, B)
+    return map(x->x.b, B)
 end
 
-function observable(pomdp::POMDP, belief, a, o)
+"""
+Return true if for a given belief and action `a` it is possible to observe `o`
+"""
+function observable(pomdp::POMDP{S,A,O}, belief, a::A, o::O) where {S,A,O}
     for (sidx, s) in enumerate(belief.b)
         s > 0 || continue
         sp_dist = transition(pomdp, belief.state_list[sidx], a)
         for (sp, p) in weighted_iterator(sp_dist)
-            op_dist = observation(pomdp, sp)
+            op_dist = observation(pomdp, belief.state_list[sidx], a, sp)
             if pdf(op_dist, o) > 0
                 return true
             end
@@ -219,9 +224,11 @@ function observable(pomdp::POMDP, belief, a, o)
     return false
 end
 
-#BUG: assumes all actions are possible at all points
+#BUG (maybe): assumes all actions are possible at all points
 function get_exhaustive_beliefs(pomdp::POMDP, depth::Integer; error=1e-8)
-    b = DiscreteBelief(pomdp,[pdf(initialstate_distribution(pomdp),s) for s in states(pomdp)])
+    
+    initialstate = [pdf(initialstate_distribution(pomdp),s) for s in states(pomdp)]
+    b = DiscreteBelief(pomdp, initialstate)
     B = [b]
 
     first = firstindex(B)
@@ -254,6 +261,7 @@ function get_exhaustive_beliefs(pomdp::POMDP, depth::Integer; error=1e-8)
     return map(b->b.b, B)
 end
 
+#TODO (maybe): have V be a Vector{Vector{Float64}} instead of Matrix{Float64}
 function perseus(pomdp::POMDP{S,A,O}, n::Integer,
                  B; improvement_tolerance, stop_tolerance, verbose) where {S,A,O}
 
@@ -275,40 +283,44 @@ function perseus(pomdp::POMDP{S,A,O}, n::Integer,
 
     for i in 1:(n-1)
         Vi, policies = perseus_step(pomdp, B, Vi, policies, error=improvement_tolerance)
-
+        
+        #TODO: depending on the size of B this operation might be very expensive,
+        #      maybe worth not doing every iteration
         quality_new = sum([maximum(Vi * B[i]) for i in 1:size(B,1)])
 
         verbose && println("quality: $quality_new, old $quality")
-
         verbose && flush(stdout)
+
         if (quality_new - quality) < stop_tolerance
-            #BUG: I'm not sure this is here doing anything
+            verbose && println("low improvement: attempting exhaustive search")
+            
             Vi_extra, policies_extra = perseus_step_all(pomdp, B, Vi, policies, error=improvement_tolerance)
+            
             if length(policies_extra) == 0
                 verbose && println("no improvements")
                 optimal = true
                 break
             else
                 verbose && println("new improvements: $(length(policies_extra))")
-                #println(Vi_extra)
-                #println(policies_extra)
                 Vi = vcat(Vi, Vi_extra)
                 policies = vcat(policies, policies_extra)
             end
+
             quality_new = sum([maximum(Vi * B[i]) for i in 1:size(B,1)])
+            
             if (quality_new - quality) < stop_tolerance
-                verbose && println("quality no better: $quality_new, old $quality")
+                verbose && println("no significant improvement to quality: $quality_new, old $quality")
                 optimal = true
                 break
             end
-            verbose && println("quality beter: $quality_new, old $quality")
+            verbose && println("exhaustive search gave improvements to quality: $quality_new, old $quality")
         end
 
         quality = quality_new
     end
 
     if !optimal
-        @warn("perseus did not find reach optimality")
+        @warn("Perseus did not converge")
     end
 
     return (Vi, policies)
