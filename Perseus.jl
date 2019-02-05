@@ -14,27 +14,28 @@ struct PerseusSolver <: POMDPs.Solver
     B::Vector{Vector{Float64}}
     improvement_tolerance::Float64
     stop_tolerance::Float64
-    max_iteration::Int64
+    max_iterations::Int64
 end
 
-function PerseusSolver(pomdp::POMDP; max_iteration::Integer,
+function PerseusSolver(pomdp::POMDP; max_iterations::Integer,
                        depth::Integer, branchingfactor::Integer,
                        stop_tolerance=1e-8::AbstractFloat,
                        improvement_tolerance=1e-8::AbstractFloat)
 
     if branchingfactor != 0
         return PerseusSolver(get_random_beliefs(pomdp, depth, branchingfactor),
-                      improvement_tolerance, stop_tolerance, max_iteration)
+                      improvement_tolerance, stop_tolerance, max_iterations)
     else
         return PerseusSolver(get_exhaustive_beliefs(pomdp, depth),
-                      improvement_tolerance, stop_tolerance, max_iteration)
+                      improvement_tolerance, stop_tolerance, max_iterations)
     end
 end
 
-function POMDPs.solve(solver::PerseusSolver, pomdp::POMDP)
-    (αs, policy) = perseus(pomdp, solver.max_iteration,
+function POMDPs.solve(solver::PerseusSolver, pomdp::POMDP; verbose=false)
+    (αs, policy) = perseus(pomdp, solver.max_iterations,
                            solver.B, stop_tolerance = solver.stop_tolerance,
-                           improvement_tolerance = solver.improvement_tolerance)
+                           improvement_tolerance = solver.improvement_tolerance, 
+                           verbose = verbose)
 
     return AlphaVectorPolicy(pomdp, collect(αs'), policy)
 end
@@ -254,12 +255,14 @@ function get_exhaustive_beliefs(pomdp::POMDP, depth::Integer; error=1e-8)
 end
 
 function perseus(pomdp::POMDP{S,A,O}, n::Integer,
-                 B; improvement_tolerance, stop_tolerance, verbose=false) where {S,A,O}
-    #show(Base.stdout, MIME"text/plain"(), B)
-    # how good it is
-    quality = 1/(1-discount(pomdp)) * minimum([reward(pomdp, s, a) for s=states(pomdp), a=actions(pomdp)]) * size(B,1)
+                 B; improvement_tolerance, stop_tolerance, verbose) where {S,A,O}
 
-    value = 1/(1-discount(pomdp)) * minimum([reward(pomdp, s, a) for s=states(pomdp), a=actions(pomdp)])
+    minimum_reward = minimum([reward(pomdp, s, a) for s in states(pomdp), 
+                                                      a in actions(pomdp)])
+
+    value = 1/(1-discount(pomdp)) * minimum_reward
+    quality = value * size(B,1)
+
     V₀ = fill(value, (1, n_states(pomdp)))
 
     if n == 1
