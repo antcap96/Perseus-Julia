@@ -1,9 +1,9 @@
 module Perseus
 
 using POMDPs
-using POMDPPolicies
-using POMDPModelTools
-using BeliefUpdaters
+using POMDPPolicies: AlphaVectorPolicy
+using POMDPModelTools: weighted_iterator
+using BeliefUpdaters: DiscreteUpdater, DiscreteBelief
 
 #TODO: https://github.com/JuliaPOMDP/POMDPToolbox.jl/blob/master/src/model/ordered_spaces.jl
 #TODO: https://github.com/JuliaPOMDP/POMDPToolbox.jl/blob/master/src/policies/alpha_vector.jl
