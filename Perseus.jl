@@ -32,6 +32,7 @@ function PerseusSolver(pomdp::POMDP; max_iterations::Integer,
 end
 
 function POMDPs.solve(solver::PerseusSolver, pomdp::POMDP; verbose=false)
+
     (αs, policy) = perseus(pomdp,
                            solver.max_iterations,
                            solver.B,
@@ -67,7 +68,6 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
                 val = temp_g' * b #sum along states
                 if val > current_max
                     current_max = val
-                    current_max_idx = i
                     #TODO: possibly faster to asign the values instead of replacing g
                     #      goal: reduce the number of alocations
                     g = temp_g
@@ -75,7 +75,6 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
             end
             temp[actionindex(pomdp,a),:] .+= g #sum along observations
         end
-
     end
 
     best_action = :nothing
@@ -224,7 +223,6 @@ function observable(pomdp::POMDP{S,A,O}, belief, a::A, o::O) where {S,A,O}
     return false
 end
 
-#BUG (maybe): assumes all actions are possible at all points
 function get_exhaustive_beliefs(pomdp::POMDP, depth::Integer; error=1e-8)
     
     initialstate = [pdf(initialstate_distribution(pomdp),s) for s in states(pomdp)]
@@ -292,15 +290,18 @@ function perseus(pomdp::POMDP{S,A,O}, n::Integer,
         verbose && flush(stdout)
 
         if (quality_new - quality) < stop_tolerance
+            
             verbose && println("low improvement: attempting exhaustive search")
             
             Vi_extra, policies_extra = perseus_step_all(pomdp, B, Vi, policies, error=improvement_tolerance)
             
             if length(policies_extra) == 0
+
                 verbose && println("no improvements")
                 optimal = true
                 break
             else
+
                 verbose && println("new improvements: $(length(policies_extra))")
                 Vi = vcat(Vi, Vi_extra)
                 policies = vcat(policies, policies_extra)
@@ -309,6 +310,7 @@ function perseus(pomdp::POMDP{S,A,O}, n::Integer,
             quality_new = sum([maximum(Vi * B[i]) for i in 1:size(B,1)])
             
             if (quality_new - quality) < stop_tolerance
+
                 verbose && println("no significant improvement to quality: $quality_new, old $quality")
                 optimal = true
                 break
