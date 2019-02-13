@@ -15,30 +15,31 @@ struct PerseusSolver <: POMDPs.Solver
     improvement_tolerance::Float64
     stop_tolerance::Float64
     max_iterations::Int64
+    verbose::Bool
 end
 
 function PerseusSolver(pomdp::POMDP; max_iterations::Integer,
                        depth::Integer, branchingfactor::Integer,
-                       stop_tolerance=1e-8::AbstractFloat,
-                       improvement_tolerance=1e-8::AbstractFloat)
+                       stop_tolerance::AbstractFloat=1e-8,
+                       improvement_tolerance::AbstractFloat=1e-8, verbose::Bool=false)
 
     if branchingfactor != 0
         return PerseusSolver(get_random_beliefs(pomdp, depth, branchingfactor),
-                      improvement_tolerance, stop_tolerance, max_iterations)
+                      improvement_tolerance, stop_tolerance, max_iterations, verbose)
     else
         return PerseusSolver(get_exhaustive_beliefs(pomdp, depth),
-                      improvement_tolerance, stop_tolerance, max_iterations)
+                      improvement_tolerance, stop_tolerance, max_iterations, verbose)
     end
 end
 
-function POMDPs.solve(solver::PerseusSolver, pomdp::POMDP; verbose=false)
+function POMDPs.solve(solver::PerseusSolver, pomdp::POMDP)
 
     (αs, policy) = perseus(pomdp,
                            solver.max_iterations,
                            solver.B,
                            stop_tolerance = solver.stop_tolerance,
                            improvement_tolerance = solver.improvement_tolerance, 
-                           verbose = verbose)
+                           verbose = solver.verbose)
 
     return AlphaVectorPolicy(pomdp, collect(αs'), policy)
 end
@@ -122,12 +123,14 @@ function perseus_step(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMa
             push!(policies, policies_prev[value_of_b_idx])
         end
 
-        filter!(B_) do b
+        filter!(B_) do other_b
             #V_(b) < value_of_b
-            value_of_b = maximum(V_prev * b)
+            #other_b == b && return false
+
+            value_of_other_b = maximum(V_prev * other_b)
             for v in V_
-                value = v' * b
-                (value >= value_of_b || isapprox(value, value_of_b, atol=error)) && return false
+                value = v' * other_b
+                (value >= value_of_other_b) && return false
             end
             return true
         end
@@ -267,7 +270,7 @@ function perseus(pomdp::POMDP{S,A,O}, n::Integer,
                                                       a in actions(pomdp)])
 
     value = 1/(1-discount(pomdp)) * minimum_reward
-    quality = value * size(B,1)
+    quality = value
 
     V₀ = fill(value, (1, n_states(pomdp)))
 
@@ -284,7 +287,7 @@ function perseus(pomdp::POMDP{S,A,O}, n::Integer,
         
         #TODO: depending on the size of B this operation might be very expensive,
         #      maybe worth not doing every iteration
-        quality_new = sum([maximum(Vi * B[i]) for i in 1:size(B,1)])
+        quality_new = sum([maximum(Vi * B[i]) for i in 1:size(B,1)])/size(B,1)
 
         verbose && println("quality: $quality_new, old $quality")
         verbose && flush(stdout)
@@ -307,7 +310,7 @@ function perseus(pomdp::POMDP{S,A,O}, n::Integer,
                 policies = vcat(policies, policies_extra)
             end
 
-            quality_new = sum([maximum(Vi * B[i]) for i in 1:size(B,1)])
+            quality_new = sum([maximum(Vi * B[i]) for i in 1:size(B,1)])/size(B,1)
             
             if (quality_new - quality) < stop_tolerance
 
