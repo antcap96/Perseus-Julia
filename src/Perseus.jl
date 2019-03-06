@@ -2,7 +2,7 @@ module Perseus
 
 using POMDPs
 using POMDPPolicies: AlphaVectorPolicy
-using POMDPModelTools: weighted_iterator
+using POMDPModelTools: weighted_iterator, ordered_actions, ordered_observations, ordered_states
 using BeliefUpdaters: DiscreteUpdater, DiscreteBelief
 
 #TODO: https://github.com/JuliaPOMDP/POMDPToolbox.jl/blob/master/src/model/ordered_spaces.jl
@@ -45,10 +45,14 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
 
     temp = zeros(n_actions(pomdp), n_states(pomdp))
 
+    ord_actions = ordered_actions(pomdp)
+    ord_states = ordered_states(pomdp)
+    ord_observations = ordered_observations(pomdp)
+
     temp_g = Vector{Float64}(undef, n_states(pomdp))
     g = Vector{Float64}(undef, n_states(pomdp))
 
-    for a in actions(pomdp)
+    for (aidx,a) in enumerate(ord_actions)
 
         for o in observations(pomdp)
             g .= 0. #zeros(n_states(pomdp))
@@ -57,7 +61,7 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
             for i in 1:size(α,1)
                 temp_g .= 0. #zeros(n_states(pomdp))
 
-                for (sidx, s) in enumerate(states(pomdp))
+                for (sidx, s) in enumerate(ord_states)
                     b[sidx] == 0. && continue
                     sp_dist = transition(pomdp, s, a)
 
@@ -74,19 +78,20 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
                     g .= temp_g
                 end
             end
-            temp[actionindex(pomdp,a),:] .+= g #sum along observations
+            temp[aidx,:] .+= g #sum along observations
         end
     end
 
-    best_action = :nothing
+    best_action = actions(pomdp)[1]
     best_vector = zeros(n_states(pomdp))
     best_value = -Inf
-    for a in actions(pomdp)
+    for (aidx,a) in enumerate(ord_actions)
         temp2 = Vector{Float64}(undef, n_states(pomdp))
-        for s in states(pomdp)
-            temp2[stateindex(pomdp,s)] = (reward(pomdp, s, a) 
-                                          + discount(pomdp)
-                                          * temp[actionindex(pomdp,a),stateindex(pomdp,s)])
+
+        for (sidx, s) in enumerate(ord_states)
+            temp2[sidx] = (reward(pomdp, s, a) 
+                        + discount(pomdp)
+                        * temp[aidx, sidx])
         end
         
         value = b' * temp2
@@ -108,6 +113,12 @@ function perseus_step(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMa
     B_ = copy(B)
 
     improvement = 0.
+
+    
+    ord_actions = ordered_actions(pomdp)
+    ord_states = ordered_states(pomdp)
+    ord_observations = ordered_observations(pomdp)
+
 
     while size(B_, 1) > 0
         b = rand(B_)
@@ -160,7 +171,7 @@ function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::Abstra
     for b in B_
         α, bestaction = backup(pomdp, b, V_prev)
 
-        value_of_b, value_of_b_idx = findmax(V_prev * b)
+        value_of_b, value_of_b_idx = findmax([V_prev[i,:]' * b for i in 1:size(V_prev, 1)])
 
         if (b' * α > value_of_b)
             push!(V_, α)
@@ -185,7 +196,7 @@ end
 
 #TODO: look into RandomPolicy from POMDPPolicies/RandomSolver
 function get_random_beliefs(pomdp::POMDP, depth::Integer, branchingfactor::Integer; error=1e-8)
-    b = DiscreteBelief(pomdp,[pdf(initialstate_distribution(pomdp),s) for s in states(pomdp)])
+    b = DiscreteBelief(pomdp,[pdf(initialstate_distribution(pomdp),s) for s in states(pomdp)]) #TODO: have it not have 0s?
     B = [b]
 
     first = firstindex(B)
@@ -199,7 +210,7 @@ function get_random_beliefs(pomdp::POMDP, depth::Integer, branchingfactor::Integ
                 new_b = update(up, B[i], rand(actions(pomdp)), rand(observations(pomdp)))
                 new = true
                 for b in B
-                    if sum(abs.(b.b .- new_b.b)) < error
+                    if sum(abs.(b.b .- new_b.b)) < error #BUG: this dooesn't seem good. is there a better way?
                         new = false
                         break
                     end
