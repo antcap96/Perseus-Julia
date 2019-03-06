@@ -38,10 +38,13 @@ function POMDPs.solve(solver::PerseusSolver, pomdp::POMDP)
                            tolerance = solver.tolerance,
                            verbose = solver.verbose)
 
-    return AlphaVectorPolicy(pomdp, collect(αs'), policy)
+
+    temp = [α[j] for α in αs, j in 1:size(αs[1],1)]
+    
+    return AlphaVectorPolicy(pomdp, collect(temp'), policy)
 end
 
-function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
+function backup(pomdp::POMDP, b::AbstractVector, V::Vector{Vector{Float64}})
 
     temp = zeros(n_actions(pomdp), n_states(pomdp))
 
@@ -58,7 +61,7 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
             g .= 0. #zeros(n_states(pomdp))
             current_max = -Inf
 
-            for i in 1:size(α,1)
+            for α in V
                 temp_g .= 0. #zeros(n_states(pomdp))
 
                 for (sidx, s) in enumerate(ord_states)
@@ -67,7 +70,7 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
 
                     for (sp, prob) in weighted_iterator(sp_dist)
                         op_dist = observation(pomdp, a, sp)
-                        temp_g[sidx] += pdf(op_dist, o) * prob * α[i, stateindex(pomdp, sp)]
+                        temp_g[sidx] += pdf(op_dist, o) * prob * α[stateindex(pomdp, sp)]
                     end
                 end
                 val = temp_g' * b #sum along states
@@ -85,9 +88,9 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
     best_action = actions(pomdp)[1]
     best_vector = zeros(n_states(pomdp))
     best_value = -Inf
+
     for (aidx,a) in enumerate(ord_actions)
         temp2 = Vector{Float64}(undef, n_states(pomdp))
-
         for (sidx, s) in enumerate(ord_states)
             temp2[sidx] = (reward(pomdp, s, a) 
                         + discount(pomdp)
@@ -106,7 +109,7 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
     return (best_vector, best_action)
 end
 
-function perseus_step(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMatrix, policies_prev::Vector{A}) where {S,A,O}
+function perseus_step(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::Vector{Vector{Float64}}, policies_prev::Vector{A}) where {S,A,O}
 
     V_ = Vector{Vector{Float64}}()
     policies = Vector{A}()
@@ -125,20 +128,20 @@ function perseus_step(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMa
 
         α, bestaction = backup(pomdp, b, V_prev)
 
-        value_of_b, value_of_b_idx = findmax([V_prev[i,:]' * b for i in 1:size(V_prev, 1)])
+        value_of_b, value_of_b_idx = findmax([V_prev[i]' * b for i in 1:size(V_prev, 1)])
 
         if b' * α >= value_of_b
             push!(V_, α)
             push!(policies, bestaction)
         else
-            α_ = V_prev[value_of_b_idx, :]
+            α_ = V_prev[value_of_b_idx]
             push!(V_, α_)
             push!(policies, policies_prev[value_of_b_idx])
         end
 
         filter!(B_) do other_b
             
-            value_of_other_b = maximum([V_prev[i,:]' * other_b for i in 1:size(V_prev, 1)])
+            value_of_other_b = maximum([V_prev[i]' * other_b for i in 1:size(V_prev, 1)])
             for v in V_
                 value = v' * other_b
                 if (value >= value_of_other_b)
@@ -151,16 +154,16 @@ function perseus_step(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMa
     end
 
     #temp = [V_[i][j] for i in 1:size(V_,1), j in 1:size(V_[1],1)]
-    temp = [v[j] for v in V_, j in 1:size(V_[1],1)]
+    #temp = [v[j] for v in V_, j in 1:size(V_[1],1)]
     #temp = hcat(V_...)' <- TODO this appears to be faster!
     #temp = [v[j] for v in V_, j in 1:size(V_[1],1)] maybe can be done better
 
     #print(sum([maximum(temp * B[i]) for i in size(B,1)]), "\r")
 
-    return (temp, policies, improvement/length(B))
+    return (V_, policies, improvement/length(B))
 end
 
-function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMatrix, policies_prev::Vector{A}) where {S,A,O}
+function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::Vector{Vector{Float64}}, policies_prev::Vector{A}) where {S,A,O}
 
     V_ = Vector{Vector{Float64}}()
     policies = Vector{A}()
@@ -171,7 +174,7 @@ function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::Abstra
     for b in B_
         α, bestaction = backup(pomdp, b, V_prev)
 
-        value_of_b, value_of_b_idx = findmax([V_prev[i,:]' * b for i in 1:size(V_prev, 1)])
+        value_of_b, value_of_b_idx = findmax([V_prev[i]' * b for i in 1:size(V_prev, 1)])
 
         if (b' * α > value_of_b)
             push!(V_, α)
@@ -180,18 +183,19 @@ function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::Abstra
             improvement += b' * α - value_of_b
         end
     end
-    if length(policies) > 0
+
+    #if length(policies) > 0
         #temp = [V_[i][j] for i in 1:size(V_,1), j in 1:size(V_[1],1)]
-        temp = [v[j] for v in V_, j in 1:size(V_[1],1)]
-    else
-        temp = Array{Float64, 2}(undef,0,0)
-    end
+    #    temp = [v[j] for v in V_, j in 1:size(V_[1],1)]
+    #else
+    #    temp = Array{Float64, 2}(undef,0,0)
+    #end
     #temp = hcat(V_...)' <- TODO this appears to be faster!
     #temp = [v[j] for v in V_, j in 1:size(V_[1],1)] maybe can be done better
 
     #print(sum([maximum(temp * B[i]) for i in size(B,1)]), "\r")
 
-    return (temp, policies, improvement/length(B))
+    return (V_, policies, improvement/length(B))
 end
 
 #TODO: look into RandomPolicy from POMDPPolicies/RandomSolver
@@ -291,7 +295,8 @@ function perseus(pomdp::POMDP{S,A,O}, n::Integer,
     value = 1/(1-discount(pomdp)) * minimum_reward
     quality = value
 
-    V₀ = fill(value, (1, n_states(pomdp)))
+    #V₀ = fill(value, (1, n_states(pomdp)))
+    V₀ = [fill(value, (n_states(pomdp)))] 
 
     if n == 1
         return V₀
