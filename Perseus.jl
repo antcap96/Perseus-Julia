@@ -12,23 +12,21 @@ export PerseusSolver
 
 struct PerseusSolver <: POMDPs.Solver
     B::Vector{Vector{Float64}}
-    improvement_tolerance::Float64
-    stop_tolerance::Float64
+    tolerance::Float64
     max_iterations::Int64
     verbose::Bool
 end
 
 function PerseusSolver(pomdp::POMDP; max_iterations::Integer,
                        depth::Integer, branchingfactor::Integer,
-                       stop_tolerance::AbstractFloat=1e-8,
-                       improvement_tolerance::AbstractFloat=1e-8, verbose::Bool=false)
+                       tolerance::AbstractFloat=1e-8, verbose::Bool=false)
 
     if branchingfactor != 0
         return PerseusSolver(get_random_beliefs(pomdp, depth, branchingfactor),
-                      improvement_tolerance, stop_tolerance, max_iterations, verbose)
+                      tolerance, max_iterations, verbose)
     else
         return PerseusSolver(get_exhaustive_beliefs(pomdp, depth),
-                      improvement_tolerance, stop_tolerance, max_iterations, verbose)
+                      tolerance, max_iterations, verbose)
     end
 end
 
@@ -37,8 +35,7 @@ function POMDPs.solve(solver::PerseusSolver, pomdp::POMDP)
     (αs, policy) = perseus(pomdp,
                            solver.max_iterations,
                            solver.B,
-                           stop_tolerance = solver.stop_tolerance,
-                           improvement_tolerance = solver.improvement_tolerance, 
+                           tolerance = solver.tolerance,
                            verbose = solver.verbose)
 
     return AlphaVectorPolicy(pomdp, collect(αs'), policy)
@@ -101,18 +98,20 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
     return (best_vector, best_action)
 end
 
-function perseus_step(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMatrix, policies_prev::Vector{A}; error=1e-6) where {S,A,O}
+function perseus_step(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMatrix, policies_prev::Vector{A}) where {S,A,O}
 
     V_ = Vector{Vector{Float64}}()
     policies = Vector{A}()
     B_ = copy(B)
+
+    improvement = 0.
 
     while size(B_, 1) > 0
         b = rand(B_)
 
         α, bestaction = backup(pomdp, b, V_prev)
 
-        value_of_b, value_of_b_idx = findmax(V_prev * b)
+        value_of_b, value_of_b_idx = findmax([V_prev[i,:]' * b for i in 1:size(V_prev, 1)])
 
         if b' * α >= value_of_b
             push!(V_, α)
@@ -124,42 +123,47 @@ function perseus_step(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMa
         end
 
         filter!(B_) do other_b
-            #V_(b) < value_of_b
-            #other_b == b && return false
-
-            value_of_other_b = maximum(V_prev * other_b)
+            
+            value_of_other_b = maximum([V_prev[i,:]' * other_b for i in 1:size(V_prev, 1)])
             for v in V_
                 value = v' * other_b
-                (value >= value_of_other_b) && return false
+                if (value >= value_of_other_b)
+                    improvement += value - value_of_other_b
+                    return false
+                end
             end
             return true
         end
     end
 
     #temp = [V_[i][j] for i in 1:size(V_,1), j in 1:size(V_[1],1)]
-    temp = temp = [v[j] for v in V_, j in 1:size(V_[1],1)]
+    temp = [v[j] for v in V_, j in 1:size(V_[1],1)]
     #temp = hcat(V_...)' <- TODO this appears to be faster!
     #temp = [v[j] for v in V_, j in 1:size(V_[1],1)] maybe can be done better
 
     #print(sum([maximum(temp * B[i]) for i in size(B,1)]), "\r")
 
-    return (temp, policies)
+    return (temp, policies, improvement/length(B))
 end
 
-function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMatrix, policies_prev::Vector{A}; error=1e-6) where {S,A,O}
+function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::AbstractMatrix, policies_prev::Vector{A}) where {S,A,O}
 
     V_ = Vector{Vector{Float64}}()
     policies = Vector{A}()
     B_ = copy(B)
+
+    improvement = 0.
 
     for b in B_
         α, bestaction = backup(pomdp, b, V_prev)
 
         value_of_b, value_of_b_idx = findmax(V_prev * b)
 
-        if (b' * α > value_of_b) && !isapprox(b' * α, value_of_b, atol=error)
+        if (b' * α > value_of_b)
             push!(V_, α)
             push!(policies, bestaction)
+
+            improvement += b' * α - value_of_b
         end
     end
     if length(policies) > 0
@@ -173,9 +177,10 @@ function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::Abstra
 
     #print(sum([maximum(temp * B[i]) for i in size(B,1)]), "\r")
 
-    return (temp, policies)
+    return (temp, policies, improvement/length(B))
 end
 
+#TODO: look into RandomPolicy from POMDPPolicies/RandomSolver
 function get_random_beliefs(pomdp::POMDP, depth::Integer, branchingfactor::Integer; error=1e-8)
     b = DiscreteBelief(pomdp,[pdf(initialstate_distribution(pomdp),s) for s in states(pomdp)])
     B = [b]
@@ -264,7 +269,7 @@ end
 
 #TODO (maybe): have V be a Vector{Vector{Float64}} instead of Matrix{Float64}
 function perseus(pomdp::POMDP{S,A,O}, n::Integer,
-                 B; improvement_tolerance, stop_tolerance, verbose) where {S,A,O}
+                 B; tolerance, verbose) where {S,A,O}
 
     minimum_reward = minimum([reward(pomdp, s, a) for s in states(pomdp), 
                                                       a in actions(pomdp)])
@@ -278,25 +283,25 @@ function perseus(pomdp::POMDP{S,A,O}, n::Integer,
         return V₀
     end
 
-    Vi, policies = perseus_step(pomdp, B, V₀, A[], error=improvement_tolerance)
+    Vi, policies = perseus_step(pomdp, B, V₀, A[])
 
     optimal = false
 
     for i in 1:(n-1)
-        Vi, policies = perseus_step(pomdp, B, Vi, policies, error=improvement_tolerance)
+        Vi, policies, improvement = perseus_step(pomdp, B, Vi, policies)
         
         #TODO: depending on the size of B this operation might be very expensive,
         #      maybe worth not doing every iteration
-        quality_new = sum([maximum(Vi * B[i]) for i in 1:size(B,1)])/size(B,1)
+        #quality_new = sum([maximum(Vi * B[i]) for i in 1:size(B,1)])/size(B,1)
 
-        verbose && println("quality: $quality_new, old $quality")
+        verbose && println("quality: $(quality+improvement), old $quality")
         verbose && flush(stdout)
 
-        if (quality_new - quality) < stop_tolerance
+        if improvement < tolerance
             
             verbose && println("low improvement: attempting exhaustive search")
             
-            Vi_extra, policies_extra = perseus_step_all(pomdp, B, Vi, policies, error=improvement_tolerance)
+            Vi_extra, policies_extra, improvement = perseus_step_all(pomdp, B, Vi, policies)
             
             if length(policies_extra) == 0
 
@@ -309,19 +314,17 @@ function perseus(pomdp::POMDP{S,A,O}, n::Integer,
                 Vi = vcat(Vi, Vi_extra)
                 policies = vcat(policies, policies_extra)
             end
-
-            quality_new = sum([maximum(Vi * B[i]) for i in 1:size(B,1)])/size(B,1)
             
-            if (quality_new - quality) < stop_tolerance
+            if improvement < tolerance
 
-                verbose && println("no significant improvement to quality: $quality_new, old $quality")
+                verbose && println("no significant improvement to quality: $(quality+improvement), old $quality")
                 optimal = true
                 break
             end
-            verbose && println("exhaustive search gave improvements to quality: $quality_new, old $quality")
+            verbose && println("exhaustive search gave improvements to quality: $(quality+improvement), old $quality")
         end
 
-        quality = quality_new
+        quality = quality+improvement
     end
 
     if !optimal
