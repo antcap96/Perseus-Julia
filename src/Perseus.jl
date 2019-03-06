@@ -1,11 +1,10 @@
 module Perseus
 
 using POMDPs
-using POMDPPolicies: AlphaVectorPolicy
+using POMDPPolicies: AlphaVectorPolicy, RandomSolver
 using POMDPModelTools: weighted_iterator, ordered_actions, ordered_observations, ordered_states
 using BeliefUpdaters: DiscreteUpdater, DiscreteBelief
 
-#TODO: https://github.com/JuliaPOMDP/POMDPToolbox.jl/blob/master/src/model/ordered_spaces.jl
 #TODO: https://github.com/JuliaPOMDP/POMDPToolbox.jl/blob/master/src/policies/alpha_vector.jl
 
 export PerseusSolver
@@ -58,11 +57,11 @@ function backup(pomdp::POMDP, b::AbstractVector, V::Vector{Vector{Float64}})
     for (aidx,a) in enumerate(ord_actions)
 
         for o in observations(pomdp)
-            g .= 0. #zeros(n_states(pomdp))
+            g .= 0. 
             current_max = -Inf
 
             for α in V
-                temp_g .= 0. #zeros(n_states(pomdp))
+                temp_g .= 0. 
 
                 for (sidx, s) in enumerate(ord_states)
                     b[sidx] == 0. && continue
@@ -76,8 +75,7 @@ function backup(pomdp::POMDP, b::AbstractVector, V::Vector{Vector{Float64}})
                 val = temp_g' * b #sum along states
                 if val > current_max
                     current_max = val
-                    #TODO: possibly faster to asign the values instead of replacing g
-                    #      goal: reduce the number of alocations
+
                     g .= temp_g
                 end
             end
@@ -153,13 +151,6 @@ function perseus_step(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::Vector{Vec
         end
     end
 
-    #temp = [V_[i][j] for i in 1:size(V_,1), j in 1:size(V_[1],1)]
-    #temp = [v[j] for v in V_, j in 1:size(V_[1],1)]
-    #temp = hcat(V_...)' <- TODO this appears to be faster!
-    #temp = [v[j] for v in V_, j in 1:size(V_[1],1)] maybe can be done better
-
-    #print(sum([maximum(temp * B[i]) for i in size(B,1)]), "\r")
-
     return (V_, policies, improvement/length(B))
 end
 
@@ -184,17 +175,6 @@ function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::Vector
         end
     end
 
-    #if length(policies) > 0
-        #temp = [V_[i][j] for i in 1:size(V_,1), j in 1:size(V_[1],1)]
-    #    temp = [v[j] for v in V_, j in 1:size(V_[1],1)]
-    #else
-    #    temp = Array{Float64, 2}(undef,0,0)
-    #end
-    #temp = hcat(V_...)' <- TODO this appears to be faster!
-    #temp = [v[j] for v in V_, j in 1:size(V_[1],1)] maybe can be done better
-
-    #print(sum([maximum(temp * B[i]) for i in size(B,1)]), "\r")
-
     return (V_, policies, improvement/length(B))
 end
 
@@ -211,7 +191,7 @@ function get_random_beliefs(pomdp::POMDP, depth::Integer, branchingfactor::Integ
     for d in 1:depth
         for i in first:last
             for j in 1:branchingfactor
-                new_b = update(up, B[i], rand(actions(pomdp)), rand(observations(pomdp)))
+                new_b = update(up, B[i], rand(actions(pomdp)), rand(observations(pomdp))) #BUG: possibly impossible things
                 new = true
                 for b in B
                     if sum(abs.(b.b .- new_b.b)) < error #BUG: this dooesn't seem good. is there a better way?
@@ -224,7 +204,7 @@ function get_random_beliefs(pomdp::POMDP, depth::Integer, branchingfactor::Integ
                 end
             end
         end
-        #B = unique(B)
+        
         first = last+1
         last = lastindex(B)
     end
@@ -285,7 +265,6 @@ function get_exhaustive_beliefs(pomdp::POMDP, depth::Integer; error=1e-8)
     return map(b->b.b, B)
 end
 
-#TODO (maybe): have V be a Vector{Vector{Float64}} instead of Matrix{Float64}
 function perseus(pomdp::POMDP{S,A,O}, n::Integer,
                  B; tolerance, verbose) where {S,A,O}
 
@@ -295,7 +274,6 @@ function perseus(pomdp::POMDP{S,A,O}, n::Integer,
     value = 1/(1-discount(pomdp)) * minimum_reward
     quality = value
 
-    #V₀ = fill(value, (1, n_states(pomdp)))
     V₀ = [fill(value, (n_states(pomdp)))] 
 
     if n == 1
