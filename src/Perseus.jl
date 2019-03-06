@@ -290,10 +290,6 @@ function perseus(pomdp::POMDP{S,A,O}, n::Integer,
     for i in 1:(n-1)
         Vi, policies, improvement = perseus_step(pomdp, B, Vi, policies)
         
-        #TODO: depending on the size of B this operation might be very expensive,
-        #      maybe worth not doing every iteration
-        #quality_new = sum([maximum(Vi * B[i]) for i in 1:size(B,1)])/size(B,1)
-
         verbose && println("quality: $(quality+improvement), old $quality")
         verbose && flush(stdout)
 
