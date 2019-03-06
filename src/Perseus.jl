@@ -46,18 +46,19 @@ function backup(pomdp::POMDP, b::AbstractVector, α::AbstractMatrix)
     temp = zeros(n_actions(pomdp), n_states(pomdp))
 
     temp_g = Vector{Float64}(undef, n_states(pomdp))
+    g = Vector{Float64}(undef, n_states(pomdp))
 
     for a in actions(pomdp)
 
         for o in observations(pomdp)
-            g = zeros(n_states(pomdp))
+            g .= 0. #zeros(n_states(pomdp))
             current_max = -Inf
 
             for i in 1:size(α,1)
-                temp_g .= 0#zeros(n_states(pomdp))
+                temp_g .= 0. #zeros(n_states(pomdp))
 
                 for (sidx, s) in enumerate(states(pomdp))
-                    b[sidx] == 0 && continue
+                    b[sidx] == 0. && continue
                     sp_dist = transition(pomdp, s, a)
 
                     for (sp, prob) in weighted_iterator(sp_dist)
