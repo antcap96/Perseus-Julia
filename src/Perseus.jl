@@ -1,9 +1,11 @@
 module Perseus
 
 using POMDPs
-using POMDPPolicies: AlphaVectorPolicy, RandomSolver
+using POMDPPolicies: AlphaVectorPolicy
 using POMDPModelTools: weighted_iterator, ordered_actions, ordered_observations, ordered_states
 using BeliefUpdaters: DiscreteUpdater, DiscreteBelief
+using DataStructures: DefaultDict
+using POMDPModelTools: SparseCat
 
 #TODO: https://github.com/JuliaPOMDP/POMDPToolbox.jl/blob/master/src/policies/alpha_vector.jl
 
@@ -68,8 +70,8 @@ function backup(pomdp::POMDP, b::AbstractVector, V::Vector{Vector{Float64}})
                     sp_dist = transition(pomdp, s, a)
 
                     for (sp, prob) in weighted_iterator(sp_dist)
-                        op_dist = observation(pomdp, a, sp)
-                        temp_g[sidx] += pdf(op_dist, o) * prob * α[stateindex(pomdp, sp)]
+                        o_dist = observation(pomdp, a, sp)
+                        temp_g[sidx] += pdf(o_dist, o) * prob * α[stateindex(pomdp, sp)]
                     end
                 end
                 val = temp_g' * b #sum along states
@@ -178,7 +180,6 @@ function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::Vector
     return (V_, policies, improvement/length(B))
 end
 
-#TODO: look into RandomPolicy from POMDPPolicies/RandomSolver
 function get_random_beliefs(pomdp::POMDP, depth::Integer, branchingfactor::Integer; error=1e-8)
     b = DiscreteBelief(pomdp,[pdf(initialstate_distribution(pomdp),s) for s in states(pomdp)]) #TODO: have it not have 0s?
     B = [b]
@@ -191,7 +192,10 @@ function get_random_beliefs(pomdp::POMDP, depth::Integer, branchingfactor::Integ
     for d in 1:depth
         for i in first:last
             for j in 1:branchingfactor
-                new_b = update(up, B[i], rand(actions(pomdp)), rand(observations(pomdp))) #BUG: possibly impossible things
+
+                a = rand(actions(pomdp))
+                
+                new_b = update(up, B[i], a, rand(observables(pomdp, b, a)))
                 new = true
                 for b in B
                     if sum(abs.(b.b .- new_b.b)) < error #BUG: this dooesn't seem good. is there a better way?
@@ -212,6 +216,46 @@ function get_random_beliefs(pomdp::POMDP, depth::Integer, branchingfactor::Integ
     return map(x->x.b, B)
 end
 
+
+
+#currently only works for obs(a,sp) and obs(sp)
+#define for obs(s,a,sp)
+function observables(pomdp::POMDP{S,A,O}, belief, a::A) where {S,A,O}
+    
+    o_dist = DefaultDict{O, Float64}(0.)
+    sp_dist = DefaultDict{S, Float64}(0.)
+
+    for (sidx, s) in enumerate(belief.b)
+
+        s > 0 || continue
+        s_sp_dist = transition(pomdp, belief.state_list[sidx], a)
+
+        for (sp, p) in weighted_iterator(s_sp_dist)
+            sp_dist[sp] += p*s
+
+            #o_dist = observation(pomdp, belief.state_list[sidx], a, sp)
+            #if pdf(o_dist, o) > 0
+            #    return true
+            #end
+        end
+    end
+
+    for (sp, p) in sp_dist
+        sp_o_dist = observation(pomdp, a, sp)
+        for (o, po) in weighted_iterator(sp_o_dist)
+            o_dist[o] += po*p
+        end
+    end
+
+    temp = SparseCat(observations(pomdp), [o_dist[o] for o in observations(pomdp)])
+
+    total = sum(temp.probs)
+
+    temp.probs ./= total
+
+    return temp
+end
+
 """
 Return true if for a given belief and action `a` it is possible to observe `o`
 """
@@ -220,8 +264,8 @@ function observable(pomdp::POMDP{S,A,O}, belief, a::A, o::O) where {S,A,O}
         s > 0 || continue
         sp_dist = transition(pomdp, belief.state_list[sidx], a)
         for (sp, p) in weighted_iterator(sp_dist)
-            op_dist = observation(pomdp, belief.state_list[sidx], a, sp)
-            if pdf(op_dist, o) > 0
+            o_dist = observation(pomdp, belief.state_list[sidx], a, sp)
+            if pdf(o_dist, o) > 0
                 return true
             end
         end
