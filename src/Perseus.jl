@@ -64,9 +64,8 @@ function backup(pomdp::POMDP, b::AbstractVector, V::Vector{Vector{Float64}})
 
             for α in V
                 temp_g .= 0. 
-
+                #this is constant, i'm very dumbo
                 for (sidx, s) in enumerate(ord_states)
-                    b[sidx] == 0. && continue
                     sp_dist = transition(pomdp, s, a)
 
                     for (sp, prob) in weighted_iterator(sp_dist)
@@ -167,13 +166,15 @@ function perseus_step_all(pomdp::POMDP{S,A,O}, B::AbstractVector, V_prev::Vector
     for b in B_
         α, bestaction = backup(pomdp, b, V_prev)
 
-        value_of_b, value_of_b_idx = findmax([V_prev[i]' * b for i in 1:size(V_prev, 1)])
+        value_of_b = maximum([V_prev[i]' * b for i in 1:size(V_prev, 1)])
 
-        if (b' * α > value_of_b)
-            push!(V_, α)
-            push!(policies, bestaction)
+        if (α' * b > value_of_b)
+            if (length(V_) == 0 || (α' * b > maximum(v' * b for v in V_)))
+                push!(V_, α)
+                push!(policies, bestaction)
+            end
 
-            improvement += b' * α - value_of_b
+            improvement += α' * b - value_of_b
         end
     end
 
